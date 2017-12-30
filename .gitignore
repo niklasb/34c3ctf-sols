@@ -1,0 +1,12 @@
+*.pyc
+__pycache__
+*.o
+a.out
+.gdb_history
+pwnlib
+core.*
+peda-*
+*.id*
+*.i64
+*.nam
+*.til
