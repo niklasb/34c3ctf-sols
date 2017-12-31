@@ -11,5 +11,5 @@ cat /vagrant/flag
 ```
 
 ## babyvm2
-kitctf
+
 Stay tuned... :>
