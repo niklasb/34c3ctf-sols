@@ -1,0 +1,21 @@
+{% extends 'blog/base.html' %}
+
+{% block title %}Contact us{% endblock %}
+
+{% block content %}
+<div class="section no-pad-bot" id="index-banner">
+  <div class="container">
+  <h2>Contact us</h2>
+  <form method="post">
+    {% csrf_token %}
+    <input type="text" name="uselessgarbage" placeholder="Tell us what's wrong" />
+    <input type="text" name="postid" placeholder="ID of a post showing the problem (post will be visited by an admin)" />
+    <input type="text" name="captcha_answer" placeholder="The answer to the question below" />
+    <label for="captcha_answer">What is {{ captcha }}?</label>
+    <br>
+    <button type="submit">Submit feedback</button>
+  </form>
+  <p>Current queue size: {{ feedback_count }}</p>
+  <br><br>
+</div></div>
+{% endblock %}

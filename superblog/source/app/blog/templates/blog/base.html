@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0"/>
+  <title>Blog - {% block title %}{% endblock %}</title>
+
+  <!-- CSS  -->
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <link href="/static/css/materialize.min.css" type="text/css" rel="stylesheet" media="screen,projection"/>
+  <link href="/static/css/style.css" type="text/css" rel="stylesheet" media="screen,projection"/>
+  <link rel="icon" type="image/png" href="/static/favicon.ico">
+</head>
+<body>
+  <nav class="light-blue lighten-1" role="navigation">
+    <div class="nav-wrapper container"><a id="logo-container" href="/" class="brand-logo">SUPERBLOG</a>
+      <ul class="right">
+        {% if user.is_authenticated %}
+        <li>Hi, {{ user.username }}</li>
+        <li><a href="/logout">Log out</a></li>
+        {% else %}
+        <li><a href="/login">Log in</a></li>
+        <li><a href="/signup">Sign up</a></li>
+        {% endif %}
+        <li><a href="/contact">Contact us</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  {% if messages %}
+  <ul class="messages">
+      {% for message in messages %}
+      <li{% if message.tags %} class="{{ message.tags }}"{% endif %}>{{ message }}</li>
+      {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% block content %}
+  {% endblock %}
+
+  <footer class="page-footer orange">
+    <div class="container">
+      <div class="row">
+        <div class="col l6 s12">
+          <h5 class="white-text">Company Bio</h5>
+          <p class="grey-text text-lighten-4">We are a team of <b>HIGH-ASS COLLEGE STUDENTS</b> working on this project <b>UNDER HEAVY INFLUENCE OF ILLEGAL SUBSTANCES</b>. Any amount would help support and continue development <b>OF OUR GANJA SUPPLY</b> and is greatly appreciated.</p>
+
+
+        </div>
+        <div class="col l3 s12">
+          <h5 class="white-text">Nope</h5>
+          <ul>
+            <li><a class="white-text" href="#!">nope</a></li>
+            <li><a class="white-text" href="#!">nope</a></li>
+            <li><a class="white-text" href="#!">nope</a></li>
+            <li><a class="white-text" href="#!">nope</a></li>
+          </ul>
+        </div>
+        <div class="col l3 s12">
+          <h5 class="white-text">Nope</h5>
+          <ul>
+            <li><a class="white-text" href="#!">nope</a></li>
+            <li><a class="white-text" href="#!">nope</a></li>
+            <li><a class="white-text" href="#!">nope</a></li>
+            <li><a class="white-text" href="#!">nope</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="footer-copyright">
+      <div class="container">
+      Made by <a class="orange-text text-lighten-3" href="http://materializecss.com">Materialize</a>
+      </div>
+    </div>
+  </footer>
+  </body>
+</html>

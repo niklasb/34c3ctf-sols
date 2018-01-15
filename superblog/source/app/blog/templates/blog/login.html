@@ -1,0 +1,20 @@
+{% extends 'blog/base.html' %}
+
+{% block title %}Login{% endblock %}
+
+{% block content %}
+<div class="section no-pad-bot" id="index-banner">
+  <div class="container">
+  <p><a href="/signup">Sign up TODAY</a> and embrace the easiest way to share
+  details of your meaningless life with a whole world of people who do not
+  care.</p>
+
+  <h2>Login</h2>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Login</button>
+  </form>
+  <br><br>
+</div></div>
+{% endblock %}

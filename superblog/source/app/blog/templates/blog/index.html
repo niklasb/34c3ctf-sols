@@ -1,0 +1,25 @@
+{% extends 'blog/base.html' %}
+
+{% block title %}Posts{% endblock %}
+
+{% block content %}
+  {% for post in posts %}
+  <div class="section no-pad-bot">
+    <div class="container post" id="{{post.secretid}}">
+      <br><br>
+      <h3 class="header orange-text"><a href="/post/{{ post.secretid }}">
+          {{ post.title }}</a></h3>
+      <div class="row">
+        {{ post.content | safe }}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="section no-pad-bot" id="index-banner">
+    <div class="container">
+      <p><a href="/feed?type=json">Get JSON feed</a></p>
+  </div></div>
+
+  {% include "blog/postform.html" %}
+{% endblock %}

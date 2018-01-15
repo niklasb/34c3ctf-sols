@@ -1,0 +1,16 @@
+{% extends 'blog/base.html' %}
+
+{% block title %}{{ post.title }}{% endblock %}
+
+{% block content %}
+  <div class="section no-pad-bot" id="index-banner">
+    <div class="container">
+      <br><br>
+      <h3 class="header orange-text"><a href="/post/{{ post.secretid }}">
+          {{ post.title }}</a></h3>
+      <div class="row">
+        {{ post.content | safe }}
+      </div>
+    </div>
+  </div>
+{% endblock %}

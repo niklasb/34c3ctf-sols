@@ -1,0 +1,20 @@
+{% extends 'blog/base.html' %}
+
+{% block title %}Flag 2{% endblock %}
+
+{% block content %}
+<div class="section no-pad-bot" id="index-banner">
+  <div class="container">
+  <p>Solve this tiny little captcha and you will get your flag:</p>
+  <form action="#" id="flagform">
+    {% csrf_token %}
+    {{ captcha }}
+    <input name="captcha_answer" type="text"/>
+    <button type="submit">Submit</button>
+  </form>
+  <p id="flag"></p>
+  <br><br>
+</div></div>
+
+<script src="/static/js/flag.js"></script>
+{% endblock %}

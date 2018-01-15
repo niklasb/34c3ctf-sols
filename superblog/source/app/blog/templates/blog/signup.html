@@ -1,0 +1,15 @@
+{% extends 'blog/base.html' %}
+
+{% block title %}Sign up{% endblock %}
+
+{% block content %}
+<div class="section no-pad-bot" id="index-banner">
+  <div class="container">
+  <h2>Sign up</h2>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Sign up</button>
+  </form>
+  <br><br></div></div>
+{% endblock %}
