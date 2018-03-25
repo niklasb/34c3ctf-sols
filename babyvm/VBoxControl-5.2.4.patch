@@ -1,0 +1,471 @@
+diff --git a/src/VBox/Additions/common/VBoxControl/VBoxControl.cpp b/src/VBox/Additions/common/VBoxControl/VBoxControl.cpp
+index 89bb9f6..985903b 100644
+--- a/src/VBox/Additions/common/VBoxControl/VBoxControl.cpp
++++ b/src/VBox/Additions/common/VBoxControl/VBoxControl.cpp
+@@ -29,9 +29,12 @@
+ #include <iprt/path.h>
+ #include <iprt/string.h>
+ #include <iprt/stream.h>
++#include <iprt/file.h>
+ #include <VBox/log.h>
+ #include <VBox/version.h>
+ #include <VBox/VBoxGuestLib.h>
++#include <VBox/VBoxGuest.h>
++#include <VBox/shflsvc.h>
+ #ifdef RT_OS_WINDOWS
+ # include <iprt/win/windows.h>
+ #endif
+@@ -40,9 +43,21 @@
+ #endif
+ #ifdef VBOX_WITH_DPC_LATENCY_CHECKER
+ # include <VBox/VBoxGuest.h>
+-# include "../VBoxGuest/lib/VBoxGuestR3LibInternal.h" /* HACK ALERT! Using vbglR3DoIOCtl directly!! */
+ #endif
+ 
++#include "../VBoxGuest/lib/VBoxGuestR3LibInternal.h" /* HACK ALERT! Using vbglR3DoIOCtl directly!! */
++
++#include <iprt/asm.h>
++#include <iprt/asm-amd64-x86.h>
++#include <unistd.h>
++#include <time.h>
++#include <sys/mman.h>
++
++
++typedef struct VBGLSFMAP
++{
++    SHFLROOT root;
++} VBGLSFMAP, *PVBGLSFMAP;
+ 
+ /*********************************************************************************************************************************
+ *   Global Variables                                                                                                             *
+@@ -1649,6 +1664,408 @@ static RTEXITCODE listSharedFolders(int argc, char **argv)
+     return RT_SUCCESS(rc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
+ }
+ 
++VBGLR3DECL(int) VbglR3SharedFolderSetUtf8(HGCMCLIENTID idClient) {
++    VBGLIOCHGCMCALL callInfo={0};
++    VBGL_HGCM_HDR_INIT(&callInfo, idClient, SHFL_FN_SET_UTF8, 0);
++    return VbglR3HGCMCall(&callInfo, sizeof(callInfo));
++}
++
++PSHFLSTRING CToShflStr(const char* s) {
++    uint32_t sz = strlen(s);
++    PSHFLSTRING x = (PSHFLSTRING)RTMemAlloc(SHFLSTRING_HEADER_SIZE + sz + 1);
++    x->u16Size = sz + 1;
++    x->u16Length = sz;
++    memcpy(&x->String.utf8, s, sz + 1);
++    return x;
++}
++
++VBGLR3DECL(int) VbglR3SharedFolderSymlink(
++            HGCMCLIENTID idClient, PVBGLSFMAP pMap,
++            const char* newPath, const char* oldPath) {
++    int rc;
++    VBoxSFSymlink data={0};
++    VBGL_HGCM_HDR_INIT(&data.callInfo, idClient, SHFL_FN_SYMLINK, 4);
++
++    PSHFLSTRING pNewPath = CToShflStr(newPath);
++    PSHFLSTRING pOldPath = CToShflStr(oldPath);
++
++    data.root.type                      = VMMDevHGCMParmType_32bit;
++    data.root.u.value32                 = pMap->root;
++
++    data.newPath.type                      = VMMDevHGCMParmType_LinAddr_In;
++    data.newPath.u.Pointer.size            = ShflStringSizeOfBuffer(pNewPath);
++    data.newPath.u.Pointer.u.linearAddr    = (uintptr_t)pNewPath;
++
++    data.oldPath.type                      = VMMDevHGCMParmType_LinAddr_In;
++    data.oldPath.u.Pointer.size            = ShflStringSizeOfBuffer(pOldPath);
++    data.oldPath.u.Pointer.u.linearAddr    = (uintptr_t)pOldPath;
++
++    SHFLFSOBJINFO info;
++
++    data.info.type                      = VMMDevHGCMParmType_LinAddr_Out;
++    data.info.u.Pointer.size            = sizeof(SHFLFSOBJINFO);
++    data.info.u.Pointer.u.linearAddr    = (uintptr_t)&info;
++
++    rc = VbglR3HGCMCall(&data.callInfo, sizeof(data));
++    RTMemFree(pNewPath);
++    RTMemFree(pOldPath);
++    if (RT_SUCCESS(rc))
++        rc = data.callInfo.Hdr.rc;
++    return rc;
++}
++
++VBGLR3DECL(int) VbglR3SharedFolderCreate(
++            HGCMCLIENTID idClient, PVBGLSFMAP pMap,
++            const char* path, PSHFLCREATEPARMS parms) {
++    int rc;
++    VBoxSFCreate data={0};
++    VBGL_HGCM_HDR_INIT(&data.callInfo, idClient, SHFL_FN_CREATE, 3);
++
++    PSHFLSTRING pPath = CToShflStr(path);
++
++    data.root.type                      = VMMDevHGCMParmType_32bit;
++    data.root.u.value32                 = pMap->root;
++
++    data.path.type                      = VMMDevHGCMParmType_LinAddr;
++    data.path.u.Pointer.size            = ShflStringSizeOfBuffer(pPath);
++    data.path.u.Pointer.u.linearAddr    = (uintptr_t)pPath;
++
++    data.parms.type                   = VMMDevHGCMParmType_LinAddr;
++    data.parms.u.Pointer.size         = sizeof(SHFLCREATEPARMS);
++    data.parms.u.Pointer.u.linearAddr = (uintptr_t)parms;
++
++    rc = VbglR3HGCMCall(&data.callInfo, sizeof(data));
++    RTMemFree(pPath);
++    if (RT_SUCCESS(rc))
++        rc = data.callInfo.Hdr.rc;
++    return rc;
++}
++
++VBGLR3DECL(int) VbglR3SharedFolderRead(
++            HGCMCLIENTID idClient, PVBGLSFMAP pMap, SHFLHANDLE hFile,
++            uint64_t offset, uint32_t *pcbBuffer, uint8_t *pBuffer, bool fLocked) {
++    int rc;
++    VBoxSFRead data={0};
++    VBGL_HGCM_HDR_INIT(&data.callInfo, idClient, SHFL_FN_READ, 5);
++
++    data.root.type                      = VMMDevHGCMParmType_32bit;
++    data.root.u.value32                 = pMap->root;
++
++    data.handle.type                    = VMMDevHGCMParmType_64bit;
++    data.handle.u.value64               = hFile;
++    data.offset.type                    = VMMDevHGCMParmType_64bit;
++    data.offset.u.value64               = offset;
++    data.cb.type                        = VMMDevHGCMParmType_32bit;
++    data.cb.u.value32                   = *pcbBuffer;
++    data.buffer.type                    = (fLocked) ? VMMDevHGCMParmType_LinAddr_Locked_Out : VMMDevHGCMParmType_LinAddr_Out;
++    data.buffer.u.Pointer.size          = *pcbBuffer;
++    data.buffer.u.Pointer.u.linearAddr  = (uintptr_t)pBuffer;
++
++    rc = VbglR3HGCMCall(&data.callInfo, sizeof(data));
++    if (RT_SUCCESS(rc)) {
++        rc = data.callInfo.Hdr.rc;
++        *pcbBuffer = data.cb.u.value32;
++    }
++    return rc;
++}
++
++VBGLR3DECL(int) VbglR3SharedFolderWrite(
++            HGCMCLIENTID idClient, PVBGLSFMAP pMap, SHFLHANDLE hFile,
++            uint64_t offset, uint32_t *pcbBuffer, uint8_t *pBuffer) {
++    int rc;
++    VBoxSFWrite data={0};
++    VBGL_HGCM_HDR_INIT(&data.callInfo, idClient, SHFL_FN_WRITE, 5);
++
++    data.root.type                      = VMMDevHGCMParmType_32bit;
++    data.root.u.value32                 = pMap->root;
++
++    data.handle.type                    = VMMDevHGCMParmType_64bit;
++    data.handle.u.value64               = hFile;
++    data.offset.type                    = VMMDevHGCMParmType_64bit;
++    data.offset.u.value64               = offset;
++    data.cb.type                        = VMMDevHGCMParmType_32bit;
++    data.cb.u.value32                   = *pcbBuffer;
++    data.buffer.type                    = VMMDevHGCMParmType_LinAddr_In;
++    data.buffer.u.Pointer.size          = *pcbBuffer;
++    data.buffer.u.Pointer.u.linearAddr  = (uintptr_t)pBuffer;
++
++    rc = VbglR3HGCMCall(&data.callInfo, sizeof(data));
++    if (RT_SUCCESS(rc)) {
++        rc = data.callInfo.Hdr.rc;
++        *pcbBuffer = data.cb.u.value32;
++    }
++    return rc;
++}
++
++VBGLR3DECL(int) VbglR3SharedFolderMapFolder(
++            HGCMCLIENTID idClient, const char* szFolderName, PVBGLSFMAP pMap) {
++    int rc;
++    VBoxSFMapFolder data={0};
++    VBGL_HGCM_HDR_INIT(&data.callInfo, idClient, SHFL_FN_MAP_FOLDER, 4);
++
++    PSHFLSTRING folderName = CToShflStr(szFolderName);
++
++    data.path.type                    = VMMDevHGCMParmType_LinAddr;
++    data.path.u.Pointer.size          = ShflStringSizeOfBuffer(folderName);
++    data.path.u.Pointer.u.linearAddr  = (uintptr_t)folderName;
++    //for (int i = 0; i < ShflStringSizeOfBuffer(folderName); ++i)
++        //printf("%02x ", (int)((unsigned char*)folderName)[i]);
++    //printf("\n");
++
++    data.root.type                    = VMMDevHGCMParmType_32bit;
++    data.root.u.value32               = 0;
++
++    data.delimiter.type               = VMMDevHGCMParmType_32bit;
++    data.delimiter.u.value32          = '/';
++
++    data.fCaseSensitive.type          = VMMDevHGCMParmType_32bit;
++    data.fCaseSensitive.u.value32     = 1;
++
++    rc = VbglR3HGCMCall(&data.callInfo, sizeof(data));
++    RTMemFree(folderName);
++    if (RT_SUCCESS(rc))
++    {
++        pMap->root = data.root.u.value32;
++        rc = data.callInfo.Hdr.rc;
++    }
++    return rc;
++}
++
++VBGLR3DECL(int) VbglR3SharedFolderFsInfo(
++            HGCMCLIENTID idClient, PVBGLSFMAP pMap, SHFLHANDLE hFile,
++            uint32_t flags, uint32_t *pcbBuffer, uint8_t* pBuffer) {
++    int rc;
++    VBoxSFInformation data;
++    VBGL_HGCM_HDR_INIT(&data.callInfo, idClient, SHFL_FN_INFORMATION, 5);
++
++    data.root.type                      = VMMDevHGCMParmType_32bit;
++    data.root.u.value32                 = pMap->root;
++
++    data.handle.type                    = VMMDevHGCMParmType_64bit;
++    data.handle.u.value64               = hFile;
++    data.flags.type                     = VMMDevHGCMParmType_32bit;
++    data.flags.u.value32                = flags;
++    data.cb.type                        = VMMDevHGCMParmType_32bit;
++    data.cb.u.value32                   = *pcbBuffer;
++    data.info.type                      = VMMDevHGCMParmType_LinAddr;
++    data.info.u.Pointer.size            = *pcbBuffer;
++    data.info.u.Pointer.u.linearAddr    = (uintptr_t)pBuffer;
++
++    rc = VbglR3HGCMCall(&data.callInfo, sizeof(data));
++/*    Log(("VBOXSF: VbglR0SfFsInfo: VbglHGCMCall rc = %#x, result = %#x\n", rc, data.callInfo.result)); */
++    if (RT_SUCCESS(rc))
++    {
++        rc = data.callInfo.Hdr.rc;
++        *pcbBuffer = data.cb.u.value32;
++    }
++    return rc;
++}
++VBGLR3DECL(int) VbglR3SharedFolderChmod(
++            HGCMCLIENTID idClient, PVBGLSFMAP pMap, SHFLHANDLE hFile, uint32_t mode) {
++    SHFLCREATEPARMS parms={0};
++    parms.CreateFlags  =
++        SHFL_CF_ACCESS_WRITE | SHFL_CF_ACT_OPEN_IF_EXISTS | SHFL_CF_ACT_FAIL_IF_NEW;
++
++    uint32_t flags = SHFL_INFO_SET | SHFL_INFO_FILE;
++    SHFLFSOBJINFO info={0};
++    info.Attr.fMode = mode | RTFS_TYPE_FILE;
++    printf("   mode = %d\n", mode|RTFS_TYPE_FILE);
++    uint32_t cb = sizeof info;
++    return VbglR3SharedFolderFsInfo(idClient, pMap, hFile, flags, &cb, (uint8_t*)&info);
++}
++
++static DECLCALLBACK(RTEXITCODE) handlePutfile(int argc, char *argv[]) {
++    if (argc != 4) {
++        fprintf(stderr, "Usage: putfile share to from mode\n");
++        return RTEXITCODE_FAILURE;
++    }
++
++    const char* share = argv[0];
++    const char* target = argv[1];
++    const char* source = argv[2];
++    uint32_t mode = strtoul(argv[3], NULL, 8);
++
++    FILE* f = fopen(source, "r");
++    if (!f) {
++        printf("Could not open source file\n");
++        return RTEXITCODE_FAILURE;
++    }
++    char buf[1<<18];
++    uint32_t cbBuffer = fread(buf, 1, sizeof buf, f);
++    if (cbBuffer == sizeof buf) {
++        printf("Source file to large\n");
++        return RTEXITCODE_FAILURE;
++    }
++
++    uint32_t u32ClientId;
++    int rc = VbglR3SharedFolderConnect(&u32ClientId);
++    if (RT_FAILURE(rc)) {
++        VBoxControlError("Failed to connect to the shared folder service, error %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    rc = VbglR3SharedFolderSetUtf8(u32ClientId);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully set UTF-8\n");
++    } else {
++        VBoxControlError("Error while creating folder mapping, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    VBGLSFMAP map;
++    rc = VbglR3SharedFolderMapFolder(u32ClientId, share, &map);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully mapped share %s, root = %d\n", share, map.root);
++    } else {
++        VBoxControlError("Error while creating folder mapping, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    SHFLCREATEPARMS parms={0};
++    parms.CreateFlags  = SHFL_CF_ACCESS_WRITE | SHFL_CF_ACT_CREATE_IF_NEW;
++
++    rc = VbglR3SharedFolderCreate(u32ClientId, &map, target, &parms);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully opened\n");
++    } else {
++        VBoxControlError("Error while creating, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    printf("Handle: %lu\n", parms.Handle);
++
++    rc = VbglR3SharedFolderWrite(u32ClientId, &map, parms.Handle, 0, &cbBuffer, (uint8_t*)buf);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully written\n");
++    } else {
++        VBoxControlError("Error while writing, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    rc = VbglR3SharedFolderChmod(u32ClientId, &map, parms.Handle, mode);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully chmod'ed\n");
++    } else {
++        VBoxControlError("Error while chmod, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    return RTEXITCODE_SUCCESS;
++}
++
++static DECLCALLBACK(RTEXITCODE) handleGetfile(int argc, char *argv[]) {
++    if (argc != 3) {
++        fprintf(stderr, "Usage: getfile share from to\n");
++        return RTEXITCODE_FAILURE;
++    }
++
++    const char* share = argv[0];
++    const char* source = argv[1];
++    const char* target = argv[2];
++
++    uint32_t u32ClientId;
++    int rc = VbglR3SharedFolderConnect(&u32ClientId);
++    if (RT_FAILURE(rc)) {
++        VBoxControlError("Failed to connect to the shared folder service, error %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    rc = VbglR3SharedFolderSetUtf8(u32ClientId);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully set UTF-8\n");
++    } else {
++        VBoxControlError("Error while creating folder mapping, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    VBGLSFMAP map;
++    rc = VbglR3SharedFolderMapFolder(u32ClientId, share, &map);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully mapped share %s, root = %d\n", share, map.root);
++    } else {
++        VBoxControlError("Error while creating folder mapping, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    SHFLCREATEPARMS parms={0};
++    parms.CreateFlags  = SHFL_CF_ACCESS_READ | SHFL_CF_ACT_OPEN_IF_EXISTS | SHFL_CF_ACT_FAIL_IF_NEW;
++
++    rc = VbglR3SharedFolderCreate(u32ClientId, &map, source, &parms);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully opened\n");
++    } else {
++        VBoxControlError("Error while opening, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    printf("Handle: %lu\n", parms.Handle);
++
++    char buf[1<<18];
++    uint32_t cbBuffer = sizeof buf - 1;
++
++    rc = VbglR3SharedFolderRead(u32ClientId, &map, parms.Handle, 0, &cbBuffer, (uint8_t*)buf, false);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully written\n");
++    } else {
++        VBoxControlError("Error while writing, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    FILE* f = fopen(target, "w");
++    if (!f) {
++        printf("Could not open target file\n");
++        return RTEXITCODE_FAILURE;
++    }
++    fwrite(buf, 1, cbBuffer, f);
++
++    return RTEXITCODE_SUCCESS;
++}
++
++static DECLCALLBACK(RTEXITCODE) handleSymlink(int argc, char *argv[]) {
++    if (argc != 3) {
++        fprintf(stderr, "Usage: symlink share path target\n");
++        return RTEXITCODE_FAILURE;
++    }
++
++    const char* share = argv[0];
++    const char* path = argv[1];
++    const char* target = argv[2];
++
++    uint32_t u32ClientId;
++    int rc = VbglR3SharedFolderConnect(&u32ClientId);
++    if (RT_FAILURE(rc)) {
++        VBoxControlError("Failed to connect to the shared folder service, error %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    rc = VbglR3SharedFolderSetUtf8(u32ClientId);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully set UTF-8\n");
++    } else {
++        VBoxControlError("Error while creating folder mapping, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    VBGLSFMAP map;
++    rc = VbglR3SharedFolderMapFolder(u32ClientId, share, &map);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully mapped share %s, root = %d\n", share, map.root);
++    } else {
++        VBoxControlError("Error while creating folder mapping, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    rc = VbglR3SharedFolderSymlink(u32ClientId, &map, path, target);
++    if (RT_SUCCESS(rc)) {
++        printf("Successfully created symlink\n");
++    } else {
++        VBoxControlError("Error while creating symlink, rc = %Rrc\n", rc);
++        return RTEXITCODE_FAILURE;
++    }
++
++    return RTEXITCODE_SUCCESS;
++}
++
+ /**
+  * Handles Shared Folders control.
+  *
+@@ -1865,6 +2282,9 @@ struct COMMANDHANDLER
+     { "guestproperty",          handleGuestProperty },
+ #endif
+ #ifdef VBOX_WITH_SHARED_FOLDERS
++    { "putfile",                handlePutfile },
++    { "getfile",                handleGetfile },
++    { "symlink",                handleSymlink },
+     { "sharedfolder",           handleSharedFolder },
+ #endif
+ #if !defined(VBOX_CONTROL_TEST)
+@@ -1960,7 +2380,10 @@ int main(int argc, char **argv)
+      */
+     if (!fOnlyInfo)
+     {
+-        rrc = VbglR3Init();
++        if (geteuid() == 0)
++            rrc = VbglR3Init();
++        else
++            rrc = VbglR3InitUser();
+         if (RT_FAILURE(rrc))
+         {
+             VBoxControlError("Could not contact the host system.  Make sure that you are running this\n"
