@@ -1,3 +1,5 @@
+**UPDATE:** I uploaded sources & exploit for the WCTF version of the challenge to https://github.com/niklasb/elgoog/
+
 There were (at least) two bugs:
 
 1. Pool overflow when compressing an index, if a posting list has duplicate
